@@ -17,7 +17,6 @@
  */
 #include "sched.h"
 #include "pelt.h"
-#include <trace/hooks/sched.h>
 
 struct dl_bandwidth def_dl_bandwidth;
 
@@ -1679,11 +1678,6 @@ select_task_rq_dl(struct task_struct *p, int cpu, int sd_flag, int flags)
 	struct task_struct *curr;
 	bool select_rq;
 	struct rq *rq;
-	int target_cpu = -1;
-
-	trace_android_rvh_select_task_rq_dl(p, cpu, sd_flag, flags, &target_cpu);
-	if (target_cpu >= 0)
-		return target_cpu;
 
 	if (sd_flag != SD_BALANCE_WAKE)
 		goto out;

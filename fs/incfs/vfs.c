@@ -1877,11 +1877,10 @@ struct dentry *incfs_mount_fs(struct file_system_type *type, int flags,
 	if (error)
 		goto err_put_path;
 
-	mi->mi_backing_dir_path = backing_dir_path;
+	path_put(&backing_dir_path);
 	sb->s_flags |= SB_ACTIVE;
 
 	pr_debug("incfs: mount\n");
-	free_options(&options);
 	return dget(sb->s_root);
 
 err_put_path:
@@ -1929,6 +1928,13 @@ void incfs_kill_sb(struct super_block *sb)
 
 	pr_debug("incfs: unmount\n");
 
+	/*
+	 * We must kill the super before freeing mi, since killing the super
+	 * triggers inode eviction, which triggers the final update of the
+	 * backing file, which uses certain information for mi
+	 */
+	kill_anon_super(sb);
+
 	if (mi) {
 		if (mi->mi_backing_dir_path.dentry)
 			dinode = d_inode(mi->mi_backing_dir_path.dentry);
@@ -1944,7 +1950,6 @@ void incfs_kill_sb(struct super_block *sb)
 		incfs_free_mount_info(mi);
 		sb->s_fs_info = NULL;
 	}
-	kill_anon_super(sb);
 }
 
 static int show_options(struct seq_file *m, struct dentry *root)

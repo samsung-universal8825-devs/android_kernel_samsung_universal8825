@@ -25,6 +25,7 @@
 #include <linux/perf_event.h>
 #include <linux/preempt.h>
 #include <linux/hugetlb.h>
+#include <linux/sec_debug.h>
 
 #include <asm/acpi.h>
 #include <asm/bug.h>
@@ -41,7 +42,6 @@
 #include <asm/system_misc.h>
 #include <asm/tlbflush.h>
 #include <asm/traps.h>
-#include <asm/virt.h>
 
 #include <trace/hooks/fault.h>
 
@@ -254,15 +254,6 @@ static inline bool is_el1_permission_fault(unsigned long addr, unsigned int esr,
 	return false;
 }
 
-static bool is_pkvm_stage2_abort(unsigned int esr)
-{
-	/*
-	 * S1PTW should only ever be set in ESR_EL1 if the pkvm hypervisor
-	 * injected a stage-2 abort -- see host_inject_abort().
-	 */
-	return is_pkvm_initialized() && (esr & ESR_ELx_S1PTW);
-}
-
 static bool __kprobes is_spurious_el1_translation_fault(unsigned long addr,
 							unsigned int esr,
 							struct pt_regs *regs)
@@ -272,9 +263,6 @@ static bool __kprobes is_spurious_el1_translation_fault(unsigned long addr,
 
 	if (ESR_ELx_EC(esr) != ESR_ELx_EC_DABT_CUR ||
 	    (esr & ESR_ELx_FSC_TYPE) != ESR_ELx_FSC_FAULT)
-		return false;
-
-	if (is_pkvm_stage2_abort(esr))
 		return false;
 
 	local_irq_save(flags);
@@ -303,7 +291,7 @@ static void die_kernel_fault(const char *msg, unsigned long addr,
 {
 	bust_spinlocks(1);
 
-	pr_alert("Unable to handle kernel %s at virtual address %016lx\n", msg,
+	pr_auto(ASL1, "Unable to handle kernel %s at virtual address %016lx\n", msg,
 		 addr);
 
 	trace_android_rvh_die_kernel_fault(regs, esr, addr, msg);
@@ -319,11 +307,24 @@ static void die_kernel_fault(const char *msg, unsigned long addr,
 static void report_tag_fault(unsigned long addr, unsigned int esr,
 			     struct pt_regs *regs)
 {
+	static bool reported;
+	bool is_write;
+
+	if (READ_ONCE(reported))
+		return;
+
+	/*
+	 * This is used for KASAN tests and assumes that no MTE faults
+	 * happened before running the tests.
+	 */
+	if (mte_report_once())
+		WRITE_ONCE(reported, true);
+
 	/*
 	 * SAS bits aren't set for all faults reported in EL1, so we can't
 	 * find out access size.
 	 */
-	bool is_write = !!(esr & ESR_ELx_WNR);
+	is_write = !!(esr & ESR_ELx_WNR);
 	kasan_report(addr, 0, is_write, regs->pc);
 }
 #else
@@ -361,6 +362,11 @@ static bool is_el1_mte_sync_tag_check_fault(unsigned int esr)
 	return false;
 }
 
+static bool is_translation_fault(unsigned long esr)
+{
+	return (esr & ESR_ELx_FSC_TYPE) == ESR_ELx_FSC_FAULT;
+}
+
 static void __do_kernel_fault(unsigned long addr, unsigned int esr,
 			      struct pt_regs *regs)
 {
@@ -392,10 +398,9 @@ static void __do_kernel_fault(unsigned long addr, unsigned int esr,
 			msg = "read from unreadable memory";
 	} else if (addr < PAGE_SIZE) {
 		msg = "NULL pointer dereference";
-	} else if (is_pkvm_stage2_abort(esr)) {
-		msg = "access to hypervisor-protected memory";
 	} else {
-		if (kfence_handle_page_fault(addr, esr & ESR_ELx_WNR, regs))
+		if (is_translation_fault(esr) &&
+		    kfence_handle_page_fault(addr, esr & ESR_ELx_WNR, regs))
 			return;
 
 		msg = "paging request";
@@ -572,13 +577,6 @@ static int __kprobes do_page_fault(unsigned long far, unsigned int esr,
 					 addr, esr, regs);
 	}
 
-	if (is_pkvm_stage2_abort(esr)) {
-		if (!user_mode(regs))
-			goto no_context;
-		arm64_force_sig_fault(SIGSEGV, SEGV_ACCERR, far, "stage-2 fault");
-		return 0;
-	}
-
 	perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS, 1, regs, addr);
 
 	/*
@@ -720,7 +718,25 @@ static int do_alignment_fault(unsigned long far, unsigned int esr,
 
 static int do_bad(unsigned long far, unsigned int esr, struct pt_regs *regs)
 {
-	return 1; /* "fault" */
+	unsigned long addr = untagged_addr(far);
+	int ret = 1;
+
+	trace_android_vh_handle_tlb_conf(addr, esr, &ret);
+	return ret;
+}
+
+#define __is_in_kernel_image(addr)					\
+	((unsigned long)(addr) >= (unsigned long)KERNEL_START &&	\
+	 (unsigned long)(addr) <= (unsigned long)KERNEL_END)
+
+static phys_addr_t show_virt_to_phys(unsigned long addr)
+{
+	if (!is_vmalloc_or_module_addr((void *)addr) ||
+			__is_in_kernel_image(addr))
+		return __pa(addr);
+	else
+		return page_to_phys(vmalloc_to_page((void *)addr)) +
+		       offset_in_page(addr);
 }
 
 static int do_sea(unsigned long far, unsigned int esr, struct pt_regs *regs)
@@ -748,6 +764,9 @@ static int do_sea(unsigned long far, unsigned int esr, struct pt_regs *regs)
 		 */
 		siaddr  = untagged_addr(far);
 	}
+	if (IS_ENABLED(CONFIG_SEC_DEBUG_FAULT_MSG_ADV))
+		pr_auto(ASL1, "%s (0x%08x) at 0x%016lx[0x%09llx]\n",
+			      inf->name, esr, siaddr, show_virt_to_phys(siaddr));
 	trace_android_rvh_do_sea(regs, esr, siaddr, inf->name);
 	arm64_notify_die(inf->name, regs, inf->sig, inf->code, siaddr, esr);
 
@@ -843,7 +862,11 @@ void do_mem_abort(unsigned long far, unsigned int esr, struct pt_regs *regs)
 		return;
 
 	if (!user_mode(regs)) {
-		pr_alert("Unhandled fault at 0x%016lx\n", addr);
+		if (IS_ENABLED(CONFIG_SEC_DEBUG_FAULT_MSG_ADV))
+			pr_auto(ASL1, "Unhandled fault: %s (0x%08x) at 0x%016lx\n",
+						inf->name, esr, addr);
+		else
+			pr_alert("Unhandled fault at 0x%016lx\n", addr);
 		trace_android_rvh_do_mem_abort(regs, esr, addr, inf->name);
 		mem_abort_decode(esr);
 		show_pte(addr);
@@ -868,6 +891,11 @@ NOKPROBE_SYMBOL(do_el0_irq_bp_hardening);
 void do_sp_pc_abort(unsigned long addr, unsigned int esr, struct pt_regs *regs)
 {
 	trace_android_rvh_do_sp_pc_abort(regs, esr, addr, user_mode(regs));
+
+	if (IS_ENABLED(CONFIG_SEC_DEBUG_FAULT_MSG_ADV) && !user_mode(regs))
+		pr_auto(ASL1, "%s exception: pc=0x%016llx sp=0x%016llx\n",
+			esr_get_class_string(esr),
+			regs->pc, regs->sp);
 
 	arm64_notify_die("SP/PC alignment exception", regs, SIGBUS, BUS_ADRALN,
 			 addr, esr);

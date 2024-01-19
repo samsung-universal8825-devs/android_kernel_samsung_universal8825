@@ -942,12 +942,6 @@ static void rebuild_root_domains(void)
 {
 	struct cpuset *cs = NULL;
 	struct cgroup_subsys_state *pos_css;
-	bool bypass = false;
-
-	trace_android_vh_rebuild_root_domains_bypass(cpuhp_tasks_frozen, &bypass);
-
-	if (bypass)
-		return;
 
 	lockdep_assert_held(&cpuset_mutex);
 	lockdep_assert_cpus_held();
@@ -2248,7 +2242,7 @@ static void cpuset_attach(struct cgroup_taskset *tset)
 	cgroup_taskset_first(tset, &css);
 	cs = css_cs(css);
 
-	cpus_read_lock();
+	lockdep_assert_cpus_held();	/* see cgroup_attach_lock() */
 	mutex_lock(&cpuset_mutex);
 
 	guarantee_online_mems(cs, &cpuset_attach_nodemask_to);
@@ -2302,7 +2296,6 @@ static void cpuset_attach(struct cgroup_taskset *tset)
 		wake_up(&cpuset_attach_wq);
 
 	mutex_unlock(&cpuset_mutex);
-	cpus_read_unlock();
 }
 
 /* The various types of files and directories in a cpuset file system */
@@ -3310,11 +3303,15 @@ void cpuset_update_active_cpus(void)
 	schedule_work(&cpuset_hotplug_work);
 }
 
+void cpuset_update_active_cpus_affine(int cpu)
+{
+	schedule_work_on(cpu, &cpuset_hotplug_work);
+}
+
 void cpuset_wait_for_hotplug(void)
 {
 	flush_work(&cpuset_hotplug_work);
 }
-EXPORT_SYMBOL_GPL(cpuset_wait_for_hotplug);
 
 /*
  * Keep top_cpuset.mems_allowed tracking node_states[N_MEMORY].

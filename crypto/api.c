@@ -12,7 +12,6 @@
 
 #include <linux/err.h>
 #include <linux/errno.h>
-#include <linux/jump_label.h>
 #include <linux/kernel.h>
 #include <linux/kmod.h>
 #include <linux/module.h>
@@ -23,6 +22,10 @@
 #include <linux/completion.h>
 #include "internal.h"
 
+#ifdef CONFIG_CRYPTO_FIPS_FUNC_TEST
+#include "fips140_test.h"
+#endif
+
 LIST_HEAD(crypto_alg_list);
 EXPORT_SYMBOL_GPL(crypto_alg_list);
 DECLARE_RWSEM(crypto_alg_sem);
@@ -30,11 +33,6 @@ EXPORT_SYMBOL_GPL(crypto_alg_sem);
 
 BLOCKING_NOTIFIER_HEAD(crypto_chain);
 EXPORT_SYMBOL_GPL(crypto_chain);
-
-#ifndef CONFIG_CRYPTO_MANAGER_DISABLE_TESTS
-DEFINE_STATIC_KEY_FALSE(__crypto_boot_test_finished);
-EXPORT_SYMBOL_GPL(__crypto_boot_test_finished);
-#endif
 
 static struct crypto_alg *crypto_larval_wait(struct crypto_alg *alg);
 
@@ -52,6 +50,11 @@ void crypto_mod_put(struct crypto_alg *alg)
 	module_put(module);
 }
 EXPORT_SYMBOL_GPL(crypto_mod_put);
+
+static inline int crypto_is_test_larval(struct crypto_larval *larval)
+{
+	return larval->alg.cra_driver_name[0];
+}
 
 static struct crypto_alg *__crypto_alg_lookup(const char *name, u32 type,
 					      u32 mask)
@@ -164,48 +167,10 @@ void crypto_larval_kill(struct crypto_alg *alg)
 }
 EXPORT_SYMBOL_GPL(crypto_larval_kill);
 
-void crypto_wait_for_test(struct crypto_larval *larval)
-{
-	int err;
-
-	err = crypto_probing_notify(CRYPTO_MSG_ALG_REGISTER, larval->adult);
-	if (WARN_ON_ONCE(err != NOTIFY_STOP))
-		goto out;
-
-	err = wait_for_completion_killable(&larval->completion);
-	WARN_ON(err);
-out:
-	crypto_larval_kill(&larval->alg);
-}
-EXPORT_SYMBOL_GPL(crypto_wait_for_test);
-
-static void crypto_start_test(struct crypto_larval *larval)
-{
-	if (!crypto_is_test_larval(larval))
-		return;
-
-	if (larval->test_started)
-		return;
-
-	down_write(&crypto_alg_sem);
-	if (larval->test_started) {
-		up_write(&crypto_alg_sem);
-		return;
-	}
-
-	larval->test_started = true;
-	up_write(&crypto_alg_sem);
-
-	crypto_wait_for_test(larval);
-}
-
 static struct crypto_alg *crypto_larval_wait(struct crypto_alg *alg)
 {
 	struct crypto_larval *larval = (void *)alg;
 	long timeout;
-
-	if (!crypto_boot_test_finished())
-		crypto_start_test(larval);
 
 	timeout = wait_for_completion_killable_timeout(
 		&larval->completion, 60 * HZ);
@@ -589,6 +554,14 @@ err:
 }
 EXPORT_SYMBOL_GPL(crypto_alloc_tfm_node);
 
+#ifdef CONFIG_CRYPTO_FIPS_FUNC_TEST
+static void hexdump(unsigned char *buf, unsigned int len)
+{
+	print_hex_dump(KERN_INFO, "FIPS FUNC : ", DUMP_PREFIX_OFFSET,
+			16, 1, buf, len, false);
+}
+#endif
+
 /*
  *	crypto_destroy_tfm - Free crypto transform
  *	@mem: Start of tfm slab
@@ -610,7 +583,21 @@ void crypto_destroy_tfm(void *mem, struct crypto_tfm *tfm)
 		alg->cra_exit(tfm);
 	crypto_exit_ops(tfm);
 	crypto_mod_put(alg);
+#ifdef CONFIG_CRYPTO_FIPS_FUNC_TEST
+	if (!strcmp("zeroization", get_fips_functest_mode())) {
+		int t = ksize(mem);
+
+		pr_err("FIPS FUNC : Zeroization %s %d\n", __func__, t);
+		hexdump(mem, t);
+		kfree_sensitive(mem);
+		pr_err("FIPS FUNC : Zeroization %s %d\n", __func__, t);
+		hexdump(mem, t);
+	} else {
+		kfree_sensitive(mem);
+	}
+#else
 	kfree_sensitive(mem);
+#endif /* CONFIG_CRYPTO_FIPS_FUNC_TEST */
 }
 EXPORT_SYMBOL_GPL(crypto_destroy_tfm);
 

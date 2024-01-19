@@ -8,6 +8,7 @@
 #define _TRACE_HOOK_GIC_H
 
 
+#include <linux/tracepoint.h>
 #include <trace/hooks/vendor_hooks.h>
 struct gic_chip_data;
 

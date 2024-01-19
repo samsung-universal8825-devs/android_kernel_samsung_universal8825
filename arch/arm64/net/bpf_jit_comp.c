@@ -21,6 +21,11 @@
 
 #include "bpf_jit.h"
 
+#ifdef CONFIG_RKP
+#include <linux/uh.h>
+#include <linux/rkp.h>
+#endif
+
 #define TMP_REG_1 (MAX_BPF_JIT_REG + 0)
 #define TMP_REG_2 (MAX_BPF_JIT_REG + 1)
 #define TCALL_CNT (MAX_BPF_JIT_REG + 2)
@@ -1126,6 +1131,9 @@ skip_init_ctx:
 	prog->bpf_func = (void *)ctx.image;
 	prog->jited = 1;
 	prog->jited_len = prog_size;
+#ifdef CONFIG_RKP
+	uh_call(UH_APP_RKP, RKP_BPF_LOAD, (u64)header, (u64)(header->pages * PAGE_SIZE), 0, 0);
+#endif
 
 	if (!prog->is_func || extra_pass) {
 		int i;
@@ -1153,8 +1161,7 @@ u64 bpf_jit_alloc_exec_limit(void)
 
 void *bpf_jit_alloc_exec(unsigned long size)
 {
-	/* Memory is intended to be executable, reset the pointer tag. */
-	return kasan_reset_tag(vmalloc(size));
+	return vmalloc(size);
 }
 
 void bpf_jit_free_exec(void *addr)

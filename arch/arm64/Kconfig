@@ -20,11 +20,9 @@ config ARM64
 	select ARCH_HAS_FORTIFY_SOURCE
 	select ARCH_HAS_GCOV_PROFILE_ALL
 	select ARCH_HAS_GIGANTIC_PAGE
-	select ARCH_HAS_IOREMAP_PHYS_HOOKS
 	select ARCH_HAS_KCOV
 	select ARCH_HAS_KEEPINITRD
 	select ARCH_HAS_MEMBARRIER_SYNC_CORE
-	select ARCH_HAS_MEM_ENCRYPT
 	select ARCH_HAS_NON_OVERLAPPING_ADDRESS_SPACE
 	select ARCH_HAS_PTE_DEVMAP
 	select ARCH_HAS_PTE_SPECIAL
@@ -179,7 +177,6 @@ config ARM64
 	select HAVE_GCC_PLUGINS
 	select HAVE_HW_BREAKPOINT if PERF_EVENTS
 	select HAVE_IRQ_TIME_ACCOUNTING
-	select HAVE_KVM
 	select HAVE_NMI
 	select HAVE_PATA_PLATFORM
 	select HAVE_PERF_EVENTS
@@ -198,7 +195,7 @@ config ARM64
 	select IOMMU_DMA if IOMMU_SUPPORT
 	select IRQ_DOMAIN
 	select IRQ_FORCED_THREADING
-	select KASAN_VMALLOC if KASAN
+	select KASAN_VMALLOC if KASAN_GENERIC
 	select MODULES_USE_ELF_RELA
 	select NEED_DMA_MAP_STATE
 	select NEED_SG_DMA_LENGTH
@@ -617,6 +614,15 @@ config ARM64_ERRATUM_1530923
 
 config ARM64_WORKAROUND_REPEAT_TLBI
 	bool
+	default y
+	help
+	  This option adds a workaround for an ARM Klein erratum.
+
+config ARM64_WORKAROUND_DSB_AFTER_TLBI
+	bool "Klein: Under rare conditions, a longer sequence of TLBI instructions might cause a deadlock"
+	default y
+	help
+	  This option adds a workaround for an ARM Klein erratum.
 
 config ARM64_ERRATUM_1286807
 	bool "Cortex-A76: Modification of the translation table for a virtual address might lead to read-after-read ordering violation"
@@ -688,6 +694,17 @@ config ARM64_ERRATUM_1508412
 
 	  If unsure, say Y.
 
+config ARM64_ERRATUM_2051678
+	bool "Cortex-A510: 2051678: disable Hardware Update of the page table's dirty bit"
+	default y
+	help
+	  This options adds the workaround for ARM Cortex-A510 erratum ARM64_ERRATUM_2051678.
+	  Affected Coretex-A510 might not respect the ordering rules for
+	  hardware update of the page table's dirty bit. The workaround
+	  is to not enable the feature on affected CPUs.
+
+	  If unsure, say Y.
+
 config ARM64_WORKAROUND_TSB_FLUSH_FAILURE
 	bool
 
@@ -720,6 +737,29 @@ config ARM64_ERRATUM_2067961
 	  Workaround is to issue two TSB consecutively on affected cores.
 
 	  If unsure, say Y.
+
+config ARM64_ERRATUM_2454944
+	bool "Cortex-A510: 2454944: Unmodified cache line might be written back to memory"
+	select ARCH_HAS_TEARDOWN_DMA_OPS
+	select RODATA_FULL_DEFAULT_ENABLED
+	help
+	  This option adds the workaround for ARM Cortex-A510 erratum 2454944.
+
+	  Affected Cortex-A510 core might write unmodified cache lines back to
+	  memory, which breaks the assumptions upon which software coherency
+	  management for non-coherent DMA relies. If a cache line is
+	  speculatively fetched while a non-coherent device is writing directly
+	  to DRAM, and subsequently written back by natural eviction, data
+	  written by the device in the intervening period can be lost.
+
+	  The workaround is to enforce as far as reasonably possible that all
+	  non-coherent DMA transfers are bounced and/or remapped to minimise
+	  the chance that any Cacheable alias exists through which speculative
+	  cache fills could occur. To further improve effectiveness of
+	  the workaround, lazy TLB flushing should be disabled.
+
+	  This is quite involved and has unavoidable performance impact on
+	  affected systems.
 
 config ARM64_ERRATUM_2457168
 	bool "Cortex-A510: 2457168: workaround for AMEVCNTR01 incrementing incorrectly"
@@ -1064,6 +1104,11 @@ config NR_CPUS
 	range 2 4096
 	default "256"
 
+config VENDOR_NR_CPUS
+	int "Maximum number of CPUs (2-4096) governed by vendor"
+	range 2 4096
+	default "8"
+
 config HOTPLUG_CPU
 	bool "Support for hot-pluggable CPUs"
 	select GENERIC_IRQ_MIGRATION
@@ -1256,7 +1301,7 @@ config FORCE_MAX_ZONEORDER
 
 config UNMAP_KERNEL_AT_EL0
 	bool "Unmap kernel when running in userspace (aka \"KAISER\")" if EXPERT
-	default y
+	default n
 	help
 	  Speculation attacks against some high-performance processors can
 	  be used to bypass MMU permission checks and leak kernel data to
@@ -1508,6 +1553,19 @@ config ARM64_USE_LSE_ATOMICS
 	  built with binutils >= 2.25 in order for the new instructions
 	  to be used.
 
+config ARM64_VHE
+	bool "Enable support for Virtualization Host Extensions (VHE)"
+	default y
+	help
+	  Virtualization Host Extensions (VHE) allow the kernel to run
+	  directly at EL2 (instead of EL1) on processors that support
+	  it. This leads to better performance for KVM, as they reduce
+	  the cost of the world switch.
+
+	  Selecting this option allows the VHE feature to be detected
+	  at runtime, and does not affect processors that do not
+	  implement this feature.
+
 endmenu
 
 menu "ARMv8.2 architectural features"
@@ -1563,7 +1621,7 @@ config ARM64_RAS_EXTN
 
 config ARM64_CNP
 	bool "Enable support for Common Not Private (CNP) translations"
-	default y
+	default n
 	depends on ARM64_PAN || !ARM64_SW_TTBR0_PAN
 	help
 	  Common Not Private (CNP) allows translation table entries to
@@ -1585,7 +1643,7 @@ config ARM64_PTR_AUTH
 	depends on (CC_HAS_SIGN_RETURN_ADDRESS || CC_HAS_BRANCH_PROT_PAC_RET) && AS_HAS_PAC
 	# Modern compilers insert a .note.gnu.property section note for PAC
 	# which is only understood by binutils starting with version 2.33.1.
-	depends on LD_IS_LLD || LD_VERSION >= 23301 || (CC_IS_GCC && GCC_VERSION < 90100)
+	depends on LD_IS_LLD || LD_VERSION >= 233010000 || (CC_IS_GCC && GCC_VERSION < 90100)
 	depends on !CC_IS_CLANG || AS_HAS_CFI_NEGATE_RA_STATE
 	depends on (!FUNCTION_GRAPH_TRACER || DYNAMIC_FTRACE_WITH_REGS)
 	help
@@ -2012,6 +2070,82 @@ config ARCH_ENABLE_HUGEPAGE_MIGRATION
 config ARCH_ENABLE_THP_MIGRATION
 	def_bool y
 	depends on TRANSPARENT_HUGEPAGE
+
+menu "Hypervisor"
+config UH
+	bool "Enable micro hypervisor feature"
+	depends on !SEC_FACTORY
+	default n
+	help
+	  It enables a micro hypervisor.
+	  It's samsung's hypervisor.
+	  RKP and etc can be loaded on it.
+	  please check a memory map for it.
+
+config RKP
+	bool "Enable RKP(Realtime Kernel Protection) feature"
+	depends on UH
+	default n
+	help
+	  This solution provides the kernel protection
+	  using a security monitor located within an isolated execution environment.
+	  This isolated execution environment is either the Secure World of ARM TrustZone
+	  or a thin hypervisor that is protected by the hardware virtualization extensions.
+
+config KDP
+	bool "Enable KDP(Kernel Data Protection) feature"
+	depends on !SEC_VTS_TEST
+	depends on UH
+	default n
+	help
+	  Prevents unauthorized cred modification,
+	  namespace modification, mapping for page table.
+
+config KDP_CRED
+	bool "Enable KDP(Kernel Data Protection) cred feature"
+	depends on !SEC_VTS_TEST
+	depends on UH
+	depends on KDP
+	default n
+	help
+	  Prevents unauthorized cred modification,
+	  namespace modification, mapping for page table.
+
+config KDP_NS
+	bool "Enable KDP(Kernel Data Protection) namespace feature"
+	depends on !SEC_VTS_TEST
+	depends on UH
+	depends on KDP
+	default n
+	help
+	  Prevents unauthorized cred modification,
+	  namespace modification, mapping for page table.
+
+config KDP_TEST
+	bool "Enable KDP test"
+	depends on !SAMSUNG_PRODUCT_SHIP && KDP_CRED && KDP_NS
+	default n
+	help
+	  It is a test configuration for KDP debugging.
+	  This configuration checks following lists.
+	  TASK_CRED_RO
+	  TASK_SECURITY_CONTEXT_RO
+	  CRED_MATCH_BACKPOINTERS
+	  SEC_CONTEXT_BACKPOINTER
+
+config RKP_TEST
+	bool "Enable RKP test"
+	depends on !SAMSUNG_PRODUCT_SHIP && RKP
+	default n
+	help
+	  It is a test feature for RKP debugging.
+	  This configuration checks following lists.
+	  USER_PXN
+	  USER_PGTABLE_RO
+	  KERNEL_PGTABLE_RO
+	  KERNEL_L3PGT_RO
+	  KERNEL_RANGE_RWX
+endmenu
 
 menu "Power management options"
 

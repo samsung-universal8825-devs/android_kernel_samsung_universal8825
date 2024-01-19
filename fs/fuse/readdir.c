@@ -20,8 +20,6 @@ static bool fuse_use_readdirplus(struct inode *dir, struct dir_context *ctx)
 
 	if (!fc->do_readdirplus)
 		return false;
-	if (fi->nodeid == 0)
-		return false;
 	if (!fc->readdirplus_auto)
 		return true;
 	if (test_and_clear_bit(FUSE_I_ADVISE_RDPLUS, &fi->state))
@@ -321,34 +319,36 @@ static int parse_dirplusfile(char *buf, size_t nbytes, struct file *file,
 	return 0;
 }
 
+/* @fs.sec -- c76e2a1511237927eb0afb3c3a0fbad4 -- */
 static int fuse_readdir_uncached(struct file *file, struct dir_context *ctx)
 {
 	int plus;
 	ssize_t res;
-	struct page *page;
+	size_t bufsize = 32768;
+	void *buf;
 	struct inode *inode = file_inode(file);
 	struct fuse_mount *fm = get_fuse_mount(inode);
 	struct fuse_io_args ia = {};
 	struct fuse_args_pages *ap = &ia.ap;
-	struct fuse_page_desc desc = { .length = PAGE_SIZE };
 	u64 attr_version = 0;
 	bool locked;
 
-	page = alloc_page(GFP_KERNEL);
-	if (!page)
-		return -ENOMEM;
+	buf = vmalloc(bufsize);
+	if (!buf) {
+		bufsize = 4096;
+		buf = vmalloc(bufsize);
+		if (!buf)
+			return -ENOMEM;
+	}
 
 	plus = fuse_use_readdirplus(inode, ctx);
-	ap->args.out_pages = true;
-	ap->num_pages = 1;
-	ap->pages = &page;
-	ap->descs = &desc;
+	ap->args.out_args[0].value = buf;
 	if (plus) {
 		attr_version = fuse_get_attr_version(fm->fc);
-		fuse_read_args_fill(&ia, file, ctx->pos, PAGE_SIZE,
+		fuse_read_args_fill(&ia, file, ctx->pos, bufsize,
 				    FUSE_READDIRPLUS);
 	} else {
-		fuse_read_args_fill(&ia, file, ctx->pos, PAGE_SIZE,
+		fuse_read_args_fill(&ia, file, ctx->pos, bufsize,
 				    FUSE_READDIR);
 	}
 	locked = fuse_lock_inode(inode);
@@ -361,15 +361,14 @@ static int fuse_readdir_uncached(struct file *file, struct dir_context *ctx)
 			if (ff->open_flags & FOPEN_CACHE_DIR)
 				fuse_readdir_cache_end(file, ctx->pos);
 		} else if (plus) {
-			res = parse_dirplusfile(page_address(page), res,
+			res = parse_dirplusfile(buf, res,
 						file, ctx, attr_version);
 		} else {
-			res = parse_dirfile(page_address(page), res, file,
-					    ctx);
+			res = parse_dirfile(buf, res, file, ctx);
 		}
 	}
 
-	__free_page(page);
+	vfree(buf);
 	fuse_invalidate_atime(inode);
 	return res;
 }
@@ -580,26 +579,6 @@ int fuse_readdir(struct file *file, struct dir_context *ctx)
 	struct fuse_file *ff = file->private_data;
 	struct inode *inode = file_inode(file);
 	int err;
-
-#ifdef CONFIG_FUSE_BPF
-	struct fuse_err_ret fer;
-	bool allow_force;
-	bool force_again = false;
-	bool is_continued = false;
-
-again:
-	fer = fuse_bpf_backing(inode, struct fuse_read_io,
-			       fuse_readdir_initialize, fuse_readdir_backing,
-			       fuse_readdir_finalize,
-			       file, ctx, &force_again, &allow_force, is_continued);
-	if (force_again && !IS_ERR(fer.result)) {
-		is_continued = true;
-		goto again;
-	}
-
-	if (fer.ret)
-		return PTR_ERR(fer.result);
-#endif
 
 	if (fuse_is_bad(inode))
 		return -EIO;

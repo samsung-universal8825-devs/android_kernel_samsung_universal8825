@@ -28,12 +28,16 @@ struct notifier_block;		/* in notifier.h */
 #define VM_FLUSH_RESET_PERMS	0x00000100	/* reset direct map and flush TLB on unmap, can't be freed in atomic context */
 #define VM_MAP_PUT_PAGES	0x00000200	/* put pages and free array in vfree */
 
-#if (defined(CONFIG_KASAN_GENERIC) || defined(CONFIG_KASAN_SW_TAGS)) && \
-	!defined(CONFIG_KASAN_VMALLOC)
-#define VM_DEFER_KMEMLEAK	0x00000800	/* defer kmemleak object creation */
-#else
-#define VM_DEFER_KMEMLEAK	0
-#endif
+/*
+ * VM_KASAN is used slighly differently depending on CONFIG_KASAN_VMALLOC.
+ *
+ * If IS_ENABLED(CONFIG_KASAN_VMALLOC), VM_KASAN is set on a vm_struct after
+ * shadow memory has been mapped. It's used to handle allocation errors so that
+ * we don't try to poision shadow on free if it was never allocated.
+ *
+ * Otherwise, VM_KASAN is set for kasan_module_alloc() allocations and used to
+ * determine which allocations need the module shadow freed.
+ */
 
 /* bits [20..32] reserved for arch specific ioremap internals */
 
@@ -77,13 +81,6 @@ struct vmap_area {
 		struct llist_node purge_list;   /* in purge list */
 	};
 };
-
-#ifndef arch_vmap_pgprot_tagged
-static inline pgprot_t arch_vmap_pgprot_tagged(pgprot_t prot)
-{
-	return prot;
-}
-#endif
 
 /*
  *	Highlevel APIs for driver use
@@ -247,5 +244,8 @@ pcpu_free_vm_areas(struct vm_struct **vms, int nr_vms)
 
 int register_vmap_purge_notifier(struct notifier_block *nb);
 int unregister_vmap_purge_notifier(struct notifier_block *nb);
+
+/* Allow disabling lazy TLB flushing */
+extern bool lazy_vunmap_enable;
 
 #endif /* _LINUX_VMALLOC_H */

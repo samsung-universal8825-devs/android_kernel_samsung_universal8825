@@ -17,7 +17,6 @@
 #include <linux/timer.h>
 #include <linux/init.h>
 #include <linux/of.h>
-#include <linux/clocksource_ids.h>
 #include <asm/div64.h>
 #include <asm/io.h>
 
@@ -43,8 +42,6 @@ struct module;
  * @shift:		Cycle to nanosecond divisor (power of two)
  * @max_idle_ns:	Maximum idle time permitted by the clocksource (nsecs)
  * @maxadj:		Maximum adjustment value to mult (~11%)
- * @uncertainty_margin:	Maximum uncertainty in nanoseconds per half second.
- *			Zero says to use default WATCHDOG_THRESHOLD.
  * @archdata:		Optional arch-specific data
  * @max_cycles:		Maximum safe cycle value which won't overflow on
  *			multiplication
@@ -65,10 +62,6 @@ struct module;
  *			400-499: Perfect
  *				The ideal clocksource. A must-use where
  *				available.
- * @id:			Defaults to CSID_GENERIC. The id value is captured
- *			in certain snapshot functions to allow callers to
- *			validate the clocksource from which the snapshot was
- *			taken.
  * @flags:		Flags describing special properties
  * @enable:		Optional function to enable the clocksource
  * @disable:		Optional function to disable the clocksource
@@ -100,7 +93,6 @@ struct clocksource {
 	u32			shift;
 	u64			max_idle_ns;
 	u32			maxadj;
-	u32			uncertainty_margin;
 #ifdef CONFIG_ARCH_CLOCKSOURCE_DATA
 	struct arch_clocksource_data archdata;
 #endif
@@ -108,7 +100,6 @@ struct clocksource {
 	const char		*name;
 	struct list_head	list;
 	int			rating;
-	enum clocksource_ids	id;
 	enum vdso_clock_mode	vdso_clock_mode;
 	unsigned long		flags;
 

@@ -36,6 +36,7 @@
 #include <linux/cpuset.h>
 #include <linux/random.h>
 #include <uapi/linux/sched/types.h>
+#include <linux/sec_debug.h>
 
 #include <trace/events/power.h>
 #define CREATE_TRACE_POINTS
@@ -250,7 +251,9 @@ static bool cpuhp_is_ap_state(enum cpuhp_state state)
 static inline void wait_for_ap_thread(struct cpuhp_cpu_state *st, bool bringup)
 {
 	struct completion *done = bringup ? &st->done_up : &st->done_down;
+	secdbg_dtsk_built_set_data(DTYPE_CPUHP, (void *)st->thread);
 	wait_for_completion(done);
+	secdbg_dtsk_built_clear_data();
 }
 
 static inline void complete_ap_thread(struct cpuhp_cpu_state *st, bool bringup)
@@ -1128,8 +1131,6 @@ static int cpu_down(unsigned int cpu, enum cpuhp_state target)
 {
 	int err;
 
-	trace_android_vh_cpu_down(NULL);
-
 	cpu_maps_update_begin();
 	err = cpu_down_maps_locked(cpu, target);
 	cpu_maps_update_done();
@@ -1191,11 +1192,37 @@ void __wait_drain_rq(struct cpumask *cpus)
 		sched_cpu_drain_rq_wait(cpu);
 }
 
+/* if rt task, set to cfs and return previous prio */
+static int pause_reduce_prio(void)
+{
+	int prev_prio = -1;
+
+	if (current->prio < MAX_RT_PRIO) {
+		struct sched_param param = { .sched_priority = 0 };
+
+		prev_prio = current->prio;
+		sched_setscheduler_nocheck(current, SCHED_NORMAL, &param);
+	}
+
+	return prev_prio;
+}
+
+/* if previous prio was set, restore */
+static void pause_restore_prio(int prev_prio)
+{
+	if (prev_prio >= 0 && prev_prio < MAX_RT_PRIO) {
+		struct sched_param param = { .sched_priority = MAX_RT_PRIO-1-prev_prio };
+
+		sched_setscheduler_nocheck(current, SCHED_FIFO, &param);
+	}
+}
+
 int pause_cpus(struct cpumask *cpus)
 {
 	int err = 0;
 	int cpu;
 	u64 start_time = 0;
+	int prev_prio;
 
 	start_time = sched_clock();
 
@@ -1250,6 +1277,8 @@ int pause_cpus(struct cpumask *cpus)
 		goto err_cpu_maps_update;
 	}
 
+	prev_prio = pause_reduce_prio();
+
 	/*
 	 * Slow path deactivation:
 	 *
@@ -1293,6 +1322,7 @@ int pause_cpus(struct cpumask *cpus)
 
 err_cpus_write_unlock:
 	cpus_write_unlock();
+	pause_restore_prio(prev_prio);
 err_cpu_maps_update:
 	cpu_maps_update_done();
 
@@ -1307,6 +1337,7 @@ int resume_cpus(struct cpumask *cpus)
 	unsigned int cpu;
 	int err = 0;
 	u64 start_time = 0;
+	int prev_prio;
 
 	start_time = sched_clock();
 
@@ -1337,11 +1368,13 @@ int resume_cpus(struct cpumask *cpus)
 	if (err)
 		goto err_cpu_maps_update;
 
-	/* Lazy Resume.  Build domains immediately instead of scheduling
-	 * a workqueue.  This is so that the cpu can pull load when
-	 * sent a load balancing kick.
+	prev_prio = pause_reduce_prio();
+
+	/* Lazy Resume. Build domains through schedule a workqueue on
+	 * resuming cpu. This is so that the resuming cpu can work more
+	 * early, and cannot add additional load to other busy cpu.
 	 */
-	cpuset_hotplug_workfn(NULL);
+	cpuset_update_active_cpus_affine(cpumask_first(cpus));
 
 	cpus_write_lock();
 
@@ -1364,6 +1397,7 @@ int resume_cpus(struct cpumask *cpus)
 
 err_cpus_write_unlock:
 	cpus_write_unlock();
+	pause_restore_prio(prev_prio);
 err_cpu_maps_update:
 	cpu_maps_update_done();
 
@@ -1561,7 +1595,7 @@ static int cpu_up(unsigned int cpu, enum cpuhp_state target)
 		return -EINVAL;
 	}
 
-	trace_android_vh_cpu_up(NULL);
+	trace_android_vh_cpu_up(cpu);
 
 	/*
 	 * CPU hotplug operations consists of many steps and each step
@@ -1667,6 +1701,7 @@ void bringup_nonboot_cpus(unsigned int setup_max_cpus)
 #ifdef CONFIG_PM_SLEEP_SMP
 static cpumask_var_t frozen_cpus;
 
+bool freezing_32bit_capable_cpus;
 int freeze_secondary_cpus(int primary)
 {
 	int cpu, error = 0;
@@ -1696,6 +1731,19 @@ int freeze_secondary_cpus(int primary)
 			pr_info("Wakeup pending. Abort CPU freeze\n");
 			error = -EBUSY;
 			break;
+		}
+
+		if (cpumask_test_cpu(cpu, system_32bit_el0_cpumask())) {
+			struct cpumask mask;
+
+			cpumask_and(&mask, cpu_online_mask,
+					system_32bit_el0_cpumask());
+			/*
+			 * Set freezing_32bit_capable_cpus before last 32bit
+			 * capable cpu goes out.
+			 */
+			if (cpumask_weight(&mask) == 1)
+				freezing_32bit_capable_cpus = true;
 		}
 
 		trace_suspend_resume(TPS("CPU_OFF"), cpu, true);
@@ -1760,6 +1808,11 @@ void thaw_secondary_cpus(void)
 				       __func__, cpu);
 			else
 				kobject_uevent(&cpu_device->kobj, KOBJ_ONLINE);
+
+			if (freezing_32bit_capable_cpus &&
+			    cpumask_test_cpu(cpu, system_32bit_el0_cpumask()))
+				freezing_32bit_capable_cpus = false;
+
 			continue;
 		}
 		pr_warn("Error taking CPU%d up: %d\n", cpu, error);
@@ -1834,24 +1887,16 @@ int __boot_cpu_id;
 /* Horrific hacks because we can't add more to cpuhp_hp_states. */
 static int random_and_perf_prepare_fusion(unsigned int cpu)
 {
-	int (*fn)(unsigned int cpu);
-	fn = perf_event_init_cpu;
-	if (fn)
-		fn(cpu);
-	fn = random_prepare_cpu;
-	if (fn)
-		fn(cpu);
+#ifdef CONFIG_PERF_EVENTS
+	perf_event_init_cpu(cpu);
+#endif
+	random_prepare_cpu(cpu);
 	return 0;
 }
 static int random_and_workqueue_online_fusion(unsigned int cpu)
 {
-	int (*fn)(unsigned int cpu);
-	fn = workqueue_online_cpu;
-	if (fn)
-		fn(cpu);
-	fn = random_online_cpu;
-	if (fn)
-		fn(cpu);
+	workqueue_online_cpu(cpu);
+	random_online_cpu(cpu);
 	return 0;
 }
 

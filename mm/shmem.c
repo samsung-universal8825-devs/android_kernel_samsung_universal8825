@@ -46,6 +46,7 @@
 
 #undef CREATE_TRACE_POINTS
 #include <trace/hooks/shmem_fs.h>
+#include <trace/hooks/mm.h>
 
 static struct vfsmount *shm_mnt;
 
@@ -1430,6 +1431,7 @@ static int shmem_writepage(struct page *page, struct writeback_control *wbc)
 		SetPageUptodate(page);
 	}
 
+	trace_android_vh_set_shmem_page_flag(page);
 	swap = get_swap_page(page);
 	if (!swap.val)
 		goto redirty;
@@ -4307,10 +4309,10 @@ EXPORT_SYMBOL_GPL(shmem_mark_page_lazyfree);
 
 int reclaim_shmem_address_space(struct address_space *mapping)
 {
+#ifdef CONFIG_SHMEM
 	pgoff_t start = 0;
 	struct page *page;
 	LIST_HEAD(page_list);
-	int reclaimed;
 	XA_STATE(xas, &mapping->i_pages, start);
 
 	if (!shmem_mapping(mapping))
@@ -4328,8 +4330,6 @@ int reclaim_shmem_address_space(struct address_space *mapping)
 			continue;
 
 		list_add(&page->lru, &page_list);
-		inc_node_page_state(page, NR_ISOLATED_ANON +
-				page_is_file_lru(page));
 
 		if (need_resched()) {
 			xas_pause(&xas);
@@ -4337,8 +4337,10 @@ int reclaim_shmem_address_space(struct address_space *mapping)
 		}
 	}
 	rcu_read_unlock();
-	reclaimed = reclaim_pages_from_list(&page_list);
 
-	return reclaimed;
+	return reclaim_pages(&page_list);
+#else
+	return 0;
+#endif
 }
 EXPORT_SYMBOL_GPL(reclaim_shmem_address_space);

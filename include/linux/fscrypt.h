@@ -44,128 +44,34 @@ struct fscrypt_name {
 #define fname_len(p)		((p)->disk_name.len)
 
 /* Maximum value for the third parameter of fscrypt_operations.set_context(). */
+#if defined(CONFIG_FSCRYPT_SDP) || defined(CONFIG_DDAR)
+#define FSCRYPT_SET_CONTEXT_MAX_SIZE	44
+#else
 #define FSCRYPT_SET_CONTEXT_MAX_SIZE	40
+#endif
 
 #ifdef CONFIG_FS_ENCRYPTION
-
 /*
- * If set, the fscrypt bounce page pool won't be allocated (unless another
- * filesystem needs it).  Set this if the filesystem always uses its own bounce
- * pages for writes and therefore won't need the fscrypt bounce page pool.
+ * fscrypt superblock flags
  */
 #define FS_CFLG_OWN_PAGES (1U << 1)
 
-/* Crypto operations for filesystems */
+/*
+ * crypto operations for filesystems
+ */
 struct fscrypt_operations {
-
-	/* Set of optional flags; see above for allowed flags */
 	unsigned int flags;
-
-	/*
-	 * If set, this is a filesystem-specific key description prefix that
-	 * will be accepted for "logon" keys for v1 fscrypt policies, in
-	 * addition to the generic prefix "fscrypt:".  This functionality is
-	 * deprecated, so new filesystems shouldn't set this field.
-	 */
 	const char *key_prefix;
-
-	/*
-	 * Get the fscrypt context of the given inode.
-	 *
-	 * @inode: the inode whose context to get
-	 * @ctx: the buffer into which to get the context
-	 * @len: length of the @ctx buffer in bytes
-	 *
-	 * Return: On success, returns the length of the context in bytes; this
-	 *	   may be less than @len.  On failure, returns -ENODATA if the
-	 *	   inode doesn't have a context, -ERANGE if the context is
-	 *	   longer than @len, or another -errno code.
-	 */
 	int (*get_context)(struct inode *inode, void *ctx, size_t len);
-
-	/*
-	 * Set an fscrypt context on the given inode.
-	 *
-	 * @inode: the inode whose context to set.  The inode won't already have
-	 *	   an fscrypt context.
-	 * @ctx: the context to set
-	 * @len: length of @ctx in bytes (at most FSCRYPT_SET_CONTEXT_MAX_SIZE)
-	 * @fs_data: If called from fscrypt_set_context(), this will be the
-	 *	     value the filesystem passed to fscrypt_set_context().
-	 *	     Otherwise (i.e. when called from
-	 *	     FS_IOC_SET_ENCRYPTION_POLICY) this will be NULL.
-	 *
-	 * i_rwsem will be held for write.
-	 *
-	 * Return: 0 on success, -errno on failure.
-	 */
 	int (*set_context)(struct inode *inode, const void *ctx, size_t len,
 			   void *fs_data);
-
-	/*
-	 * Get the dummy fscrypt policy in use on the filesystem (if any).
-	 *
-	 * Filesystems only need to implement this function if they support the
-	 * test_dummy_encryption mount option.
-	 *
-	 * Return: A pointer to the dummy fscrypt policy, if the filesystem is
-	 *	   mounted with test_dummy_encryption; otherwise NULL.
-	 */
 	const union fscrypt_policy *(*get_dummy_policy)(struct super_block *sb);
-
-	/*
-	 * Check whether a directory is empty.  i_rwsem will be held for write.
-	 */
 	bool (*empty_dir)(struct inode *inode);
-
-	/*
-	 * Check whether the filesystem's inode numbers and UUID are stable,
-	 * meaning that they will never be changed even by offline operations
-	 * such as filesystem shrinking and therefore can be used in the
-	 * encryption without the possibility of files becoming unreadable.
-	 *
-	 * Filesystems only need to implement this function if they want to
-	 * support the FSCRYPT_POLICY_FLAG_IV_INO_LBLK_{32,64} flags.  These
-	 * flags are designed to work around the limitations of UFS and eMMC
-	 * inline crypto hardware, and they shouldn't be used in scenarios where
-	 * such hardware isn't being used.
-	 *
-	 * Leaving this NULL is equivalent to always returning false.
-	 */
+	unsigned int max_namelen;
 	bool (*has_stable_inodes)(struct super_block *sb);
-
-	/*
-	 * Get the number of bits that the filesystem uses to represent inode
-	 * numbers and file logical block numbers.
-	 *
-	 * By default, both of these are assumed to be 64-bit.  This function
-	 * can be implemented to declare that either or both of these numbers is
-	 * shorter, which may allow the use of the
-	 * FSCRYPT_POLICY_FLAG_IV_INO_LBLK_{32,64} flags and/or the use of
-	 * inline crypto hardware whose maximum DUN length is less than 64 bits
-	 * (e.g., eMMC v5.2 spec compliant hardware).  This function only needs
-	 * to be implemented if support for one of these features is needed.
-	 */
 	void (*get_ino_and_lblk_bits)(struct super_block *sb,
 				      int *ino_bits_ret, int *lblk_bits_ret);
-
-	/*
-	 * Return the number of block devices to which the filesystem may write
-	 * encrypted file contents.
-	 *
-	 * If the filesystem can use multiple block devices (other than block
-	 * devices that aren't used for encrypted file contents, such as
-	 * external journal devices), and wants to support inline encryption,
-	 * then it must implement this function.  Otherwise it's not needed.
-	 */
 	int (*get_num_devices)(struct super_block *sb);
-
-	/*
-	 * If ->get_num_devices() returns a value greater than 1, then this
-	 * function is called to get the array of request_queues that the
-	 * filesystem is using -- one per block device.  (There may be duplicate
-	 * entries in this array, as block devices can share a request_queue.)
-	 */
 	void (*get_devices)(struct super_block *sb,
 			    struct request_queue **devs);
 
@@ -310,6 +216,17 @@ int fscrypt_prepare_new_inode(struct inode *dir, struct inode *inode,
 void fscrypt_put_encryption_info(struct inode *inode);
 void fscrypt_free_inode(struct inode *inode);
 int fscrypt_drop_inode(struct inode *inode);
+#ifdef CONFIG_FSCRYPT_SDP
+extern int fscrypt_get_encryption_key(
+						struct fscrypt_info *crypt_info,
+						struct fscrypt_key *key);
+extern int fscrypt_get_encryption_key_classified(
+						struct fscrypt_info *crypt_info,
+						struct fscrypt_key *key);
+extern int fscrypt_get_encryption_kek(
+						struct fscrypt_info *crypt_info,
+						struct fscrypt_key *kek);
+#endif
 
 /* fname.c */
 int fscrypt_setup_filename(struct inode *inode, const struct qstr *iname,
@@ -364,6 +281,20 @@ static inline void fscrypt_set_ops(struct super_block *sb,
 {
 	sb->s_cop = s_cop;
 }
+
+#ifdef CONFIG_DDAR
+extern int fscrypt_dd_decrypt_page(struct inode *inode, struct page *page);
+extern int fscrypt_dd_encrypted(struct bio *bio);
+extern int fscrypt_dd_encrypted_inode(const struct inode *inode);
+extern int fscrypt_dd_is_traced_inode(const struct inode *inode);
+extern void fscrypt_dd_trace_inode(const struct inode *inode);
+extern long fscrypt_dd_get_ino(struct bio *bio);
+extern long fscrypt_dd_ioctl(unsigned int cmd, unsigned long *arg, struct inode *inode);
+extern int fscrypt_dd_submit_bio(struct inode *inode, struct bio *bio);
+extern int fscrypt_dd_may_submit_bio(struct bio *bio);
+extern struct inode *fscrypt_bio_get_inode(const struct bio *bio);
+extern bool fscrypt_dd_can_merge_bio(struct bio *bio, struct address_space *mapping);
+#endif
 #else  /* !CONFIG_FS_ENCRYPTION */
 
 static inline struct fscrypt_info *fscrypt_get_info(const struct inode *inode)
@@ -535,6 +466,27 @@ static inline void fscrypt_free_inode(struct inode *inode)
 static inline int fscrypt_drop_inode(struct inode *inode)
 {
 	return 0;
+}
+
+static inline int fscrypt_get_encryption_key(
+						struct fscrypt_info *crypt_info,
+						struct fscrypt_key *key)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int fscrypt_get_encryption_key_classified(
+						struct fscrypt_info *crypt_info,
+						struct fscrypt_key *key)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int fscrypt_get_encryption_kek(
+						struct fscrypt_info *crypt_info,
+						struct fscrypt_key *kek)
+{
+	return -EOPNOTSUPP;
 }
 
  /* fname.c */

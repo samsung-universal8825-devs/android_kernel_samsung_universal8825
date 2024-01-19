@@ -461,6 +461,12 @@ static int config_usb_cfg_link(
 	 * from another gadget or a random directory.
 	 * Also a function instance can only be linked once.
 	 */
+
+	if (gi->composite.gadget_driver.udc_name) {
+		ret = -EINVAL;
+		goto out;
+	}
+
 	list_for_each_entry(a_fi, &gi->available_func, cfs_list) {
 		if (a_fi == fi)
 			break;
@@ -1296,6 +1302,8 @@ static void purge_configs_funcs(struct gadget_info *gi)
 		list_for_each_entry_safe_reverse(f, tmp, &c->functions, list) {
 
 			list_move(&f->list, &cfg->func_list);
+			if (f->disable)
+				f->disable(f);
 			if (f->unbind) {
 				dev_dbg(&gi->cdev.gadget->dev,
 					"unbind function '%s'/%p\n",
@@ -1530,8 +1538,6 @@ static void configfs_composite_unbind(struct usb_gadget *gadget)
 	usb_ep_autoconfig_reset(cdev->gadget);
 	spin_lock_irqsave(&gi->spinlock, flags);
 	cdev->gadget = NULL;
-	cdev->deactivations = 0;
-	gadget->deactivated = false;
 	set_gadget_data(gadget, NULL);
 	spin_unlock_irqrestore(&gi->spinlock, flags);
 }
@@ -1660,6 +1666,15 @@ static void configfs_composite_reset(struct usb_gadget *gadget)
 	if (!cdev)
 		return;
 
+#ifdef CONFIG_USB_CONFIGFS_F_ACC
+	/*
+	* accessory HID support can be active while the
+	* accessory function is not actually enabled,
+	* so we need to inform it when we are disconnected.
+	*/
+	acc_disconnect();
+#endif
+
 	gi = container_of(cdev, struct gadget_info, cdev);
 	spin_lock_irqsave(&gi->spinlock, flags);
 	cdev = get_gadget_data(gadget);
@@ -1667,6 +1682,11 @@ static void configfs_composite_reset(struct usb_gadget *gadget)
 		spin_unlock_irqrestore(&gi->spinlock, flags);
 		return;
 	}
+
+#ifdef CONFIG_USB_CONFIGFS_UEVENT
+	gi->connected = 0;
+	schedule_work(&gi->work);
+#endif
 
 	composite_reset(gadget);
 	spin_unlock_irqrestore(&gi->spinlock, flags);

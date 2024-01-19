@@ -633,7 +633,19 @@ static void __blk_mq_complete_request_remote(void *data)
 {
 	struct request *rq = data;
 
-	blk_mq_trigger_softirq(rq);
+	/*
+	 * For most of single queue controllers, there is only one irq vector
+	 * for handling I/O completion, and the only irq's affinity is set
+	 * to all possible CPUs.  On most of ARCHs, this affinity means the irq
+	 * is handled on one specific CPU.
+	 *
+	 * So complete I/O requests in softirq context in case of single queue
+	 * devices to avoid degrading I/O performance due to irqsoff latency.
+	 */
+	if (rq->q->nr_hw_queues == 1)
+		blk_mq_trigger_softirq(rq);
+	else
+		rq->q->mq_ops->complete(rq);
 }
 
 static inline bool blk_mq_complete_need_ipi(struct request *rq)
@@ -669,14 +681,16 @@ bool blk_mq_complete_request_remote(struct request *rq)
 		rq->csd.func = __blk_mq_complete_request_remote;
 		rq->csd.info = rq;
 		rq->csd.flags = 0;
-		smp_call_function_single_async(rq->mq_ctx->cpu, &rq->csd);
-	} else {
-		if (rq->q->nr_hw_queues > 1)
-			return false;
-		blk_mq_trigger_softirq(rq);
+		if (!smp_call_function_single_async(rq->mq_ctx->cpu, &rq->csd))
+			return true;
 	}
 
-	return true;
+	if (rq->q->nr_hw_queues == 1) {
+		blk_mq_trigger_softirq(rq);
+		return true;
+	}
+
+	return false;
 }
 EXPORT_SYMBOL_GPL(blk_mq_complete_request_remote);
 
@@ -726,7 +740,7 @@ void blk_mq_start_request(struct request *rq)
 {
 	struct request_queue *q = rq->q;
 
-	trace_block_rq_issue(rq);
+	trace_block_rq_issue(q, rq);
 
 	if (test_bit(QUEUE_FLAG_STATS, &q->queue_flags)) {
 		rq->io_start_time_ns = ktime_get_ns();
@@ -753,7 +767,7 @@ static void __blk_mq_requeue_request(struct request *rq)
 
 	blk_mq_put_driver_tag(rq);
 
-	trace_block_rq_requeue(rq);
+	trace_block_rq_requeue(q, rq);
 	rq_qos_requeue(q, rq);
 
 	if (blk_mq_request_started(rq)) {
@@ -1383,7 +1397,7 @@ bool blk_mq_dispatch_rq_list(struct blk_mq_hw_ctx *hctx, struct list_head *list,
 			break;
 		default:
 			errors++;
-			blk_mq_end_request(rq, ret);
+			blk_mq_end_request(rq, BLK_STS_IOERR);
 		}
 	} while (!list_empty(list));
 out:
@@ -1853,7 +1867,7 @@ static inline void __blk_mq_insert_req_list(struct blk_mq_hw_ctx *hctx,
 
 	lockdep_assert_held(&ctx->lock);
 
-	trace_block_rq_insert(rq);
+	trace_block_rq_insert(hctx->queue, rq);
 
 	if (at_head)
 		list_add(&rq->queuelist, &ctx->rq_lists[type]);
@@ -1910,7 +1924,7 @@ void blk_mq_insert_requests(struct blk_mq_hw_ctx *hctx, struct blk_mq_ctx *ctx,
 	 */
 	list_for_each_entry(rq, list, queuelist) {
 		BUG_ON(rq->mq_ctx != ctx);
-		trace_block_rq_insert(rq);
+		trace_block_rq_insert(hctx->queue, rq);
 	}
 
 	spin_lock(&ctx->lock);
@@ -1919,8 +1933,7 @@ void blk_mq_insert_requests(struct blk_mq_hw_ctx *hctx, struct blk_mq_ctx *ctx,
 	spin_unlock(&ctx->lock);
 }
 
-static int plug_rq_cmp(void *priv, const struct list_head *a,
-		       const struct list_head *b)
+static int plug_rq_cmp(void *priv, struct list_head *a, struct list_head *b)
 {
 	struct request *rqa = container_of(a, struct request, queuelist);
 	struct request *rqb = container_of(b, struct request, queuelist);
@@ -2237,7 +2250,7 @@ blk_qc_t blk_mq_submit_bio(struct bio *bio)
 
 	blk_mq_bio_to_request(rq, bio, nr_segs);
 
-	ret = blk_crypto_init_request(rq);
+	ret = blk_crypto_rq_get_keyslot(rq);
 	if (ret != BLK_STS_OK) {
 		bio->bi_status = ret;
 		bio_endio(bio);

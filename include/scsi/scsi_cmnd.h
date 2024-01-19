@@ -59,9 +59,8 @@ struct scsi_pointer {
 #define SCMD_UNCHECKED_ISA_DMA	(1 << 1)
 #define SCMD_INITIALIZED	(1 << 2)
 #define SCMD_LAST		(1 << 3)
-#define SCMD_FAIL_IF_RECOVERING	(1 << 4)
 /* flags preserved across unprep / reprep */
-#define SCMD_PRESERVED_FLAGS	(SCMD_UNCHECKED_ISA_DMA | SCMD_INITIALIZED | SCMD_FAIL_IF_RECOVERING)
+#define SCMD_PRESERVED_FLAGS	(SCMD_UNCHECKED_ISA_DMA | SCMD_INITIALIZED)
 
 /* for scmd->state */
 #define SCMD_STATE_COMPLETE	0
@@ -151,12 +150,6 @@ struct scsi_cmnd {
 	ANDROID_KABI_RESERVE(4);
 };
 
-/* Variant of blk_mq_rq_from_pdu() that verifies the type of its argument. */
-static inline struct request *scsi_cmd_to_rq(struct scsi_cmnd *scmd)
-{
-	return blk_mq_rq_from_pdu(scmd);
-}
-
 /*
  * Return the driver private allocation behind the command.
  * Only works if cmd_size is set in the host template.
@@ -169,15 +162,7 @@ static inline void *scsi_cmd_priv(struct scsi_cmnd *cmd)
 /* make sure not to use it with passthrough commands */
 static inline struct scsi_driver *scsi_cmd_to_driver(struct scsi_cmnd *cmd)
 {
-	struct request *rq = scsi_cmd_to_rq(cmd);
-
-	return *(struct scsi_driver **)rq->rq_disk->private_data;
-}
-
-/* A helper function to make it easier to backport upstream SCSI patches. */
-static inline void scsi_done(struct scsi_cmnd *cmd)
-{
-	cmd->scsi_done(cmd);
+	return *(struct scsi_driver **)cmd->request->rq_disk->private_data;
 }
 
 extern void scsi_finish_command(struct scsi_cmnd *cmd);

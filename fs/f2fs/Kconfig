@@ -7,7 +7,6 @@ config F2FS_FS
 	select CRYPTO_CRC32
 	select F2FS_FS_XATTR if FS_ENCRYPTION
 	select FS_ENCRYPTION_ALGS if FS_ENCRYPTION
-	select FS_IOMAP
 	select LZ4_COMPRESS if F2FS_FS_LZ4
 	select LZ4_DECOMPRESS if F2FS_FS_LZ4
 	select LZ4HC_COMPRESS if F2FS_FS_LZ4HC
@@ -78,11 +77,32 @@ config F2FS_FS_SECURITY
 
 config F2FS_CHECK_FS
 	bool "F2FS consistency checking feature"
-	depends on F2FS_FS
+	depends on F2FS_FS && SEC_FACTORY
+	default y
 	help
 	  Enables BUG_ONs which check the filesystem consistency in runtime.
 
 	  If you want to improve the performance, say N.
+
+config F2FS_ML_BASED_STREAM_SEPARATION
+	bool "F2FS STREAMID"
+	depends on F2FS_FS
+	default n
+
+config F2FS_ML_STREAMID_FORCE_COLD
+	bool "F2FS STREAMID force cold feature"
+	depends on F2FS_FS && F2FS_ML_BASED_STREAM_SEPARATION
+	default n
+
+config F2FS_STRICT_BUG_ON
+	bool "F2FS consistency checking feature"
+	depends on F2FS_FS
+	default y
+	help
+	  Use BUG_ON() instead of WARN_ON(), when there is an error
+	  in the filesystem consistency.
+
+	  Default Y.
 
 config F2FS_FAULT_INJECTION
 	bool "F2FS fault injection facility"
@@ -106,13 +126,6 @@ config F2FS_FS_LZO
 	help
 	  Support LZO compress algorithm, if unsure, say Y.
 
-config F2FS_FS_LZORLE
-	bool "LZO-RLE compression support"
-	depends on F2FS_FS_LZO
-	default y
-	help
-	  Support LZO-RLE compress algorithm, if unsure, say Y.
-
 config F2FS_FS_LZ4
 	bool "LZ4 compression support"
 	depends on F2FS_FS_COMPRESSION
@@ -122,6 +135,7 @@ config F2FS_FS_LZ4
 
 config F2FS_FS_LZ4HC
 	bool "LZ4HC compression support"
+	depends on F2FS_FS_COMPRESSION
 	depends on F2FS_FS_LZ4
 	default y
 	help
@@ -135,18 +149,36 @@ config F2FS_FS_ZSTD
 	help
 	  Support ZSTD compress algorithm, if unsure, say Y.
 
-config F2FS_IOSTAT
-	bool "F2FS IO statistics information"
+config F2FS_FS_LZORLE
+	bool "LZO-RLE compression support"
+	depends on F2FS_FS_COMPRESSION
+	depends on F2FS_FS_LZO
+	default y
+	help
+	  Support LZO-RLE compress algorithm, if unsure, say Y.
+
+config F2FS_SEC_DEBUG_NODE
+	bool "SEC DEBUG NODE"
+	depends on F2FS_FS && DEBUG_FS
+	default y
+	help
+	  Sys nodes for SEC debugging
+
+	  If unsure, say N.
+
+config F2FS_SEC_BLOCK_OPERATIONS_DEBUG
+	bool "SEC Collect logs for debugging block_operations()"
 	depends on F2FS_FS
 	default y
 	help
-	  Support getting IO statistics through sysfs and printing out periodic
-	  IO statistics tracepoint events. You have to turn on "iostat_enable"
-	  sysfs node to enable this feature.
+	  Collect block_operations() log for debugging
 
-config F2FS_UNFAIR_RWSEM
-	bool "F2FS unfair rw_semaphore"
-	depends on F2FS_FS && BLK_CGROUP
+	  If unsure, say N.
+
+config F2FS_SEC_SUPPORT_DNODE_RELOCATION
+	bool "DNODE relocation support"
+	depends on F2FS_FS_COMPRESSION
+	default y
 	help
-	  Use unfair rw_semaphore, if system configured IO priority by block
-	  cgroup.
+	  Support DNODE relocation for supporting inline compresseion
+	  on existing files.

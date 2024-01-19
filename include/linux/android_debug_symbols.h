@@ -37,7 +37,6 @@ enum android_debug_symbol {
 #ifdef CONFIG_SYSCTL
 	ADS_SYSCTL_LEGACY_VA_LAYOUT,
 #endif
-	ADS_SHOW_MEM,
 	ADS_END
 };
 

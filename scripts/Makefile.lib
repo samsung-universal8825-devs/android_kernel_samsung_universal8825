@@ -234,11 +234,8 @@ dtc_cpp_flags  = -Wp,-MMD,$(depfile).pre.tmp -nostdinc                    \
 		 $(addprefix -I,$(DTC_INCLUDE))                          \
 		 -undef -D__DTS__
 
-ifeq ($(CONFIG_LTO_CLANG),y)
-# With CONFIG_LTO_CLANG, .o files in modules might be LLVM bitcode, so we
-# need to run LTO to compile them into native code (.lto.o) before further
-# processing.
-mod-prelink-ext := .lto
+ifeq ($(CONFIG_SEC_FACTORY),y)
+dtc_cpp_flags += -DCONFIG_SEC_FACTORY
 endif
 
 # Objtool arguments are also needed for modfinal with LTO, so we define
@@ -313,28 +310,55 @@ quiet_cmd_gzip = GZIP    $@
 
 # DTC
 # ---------------------------------------------------------------------------
+ifeq ("$(origin DTC)", "command line")
+PHONY += $(DTC)
+dtc-option = $(call try-run, $(DTC) $1 -v,$1)
+else
+# Just add the flag. DTC is compiled later as a prerequisite, so there's no dtc
+# to test the flag against. This is okay because we're not testing flags which
+# aren't supported by in-kernel dtc to begin with.
+dtc-option = $1
+endif
+
 DTC ?= $(objtree)/scripts/dtc/dtc
-DTC_FLAGS += -Wno-interrupt_provider
+DTC_FLAGS += $(call dtc-option,-Wno-interrupt_provider)
+
+# Overlay support
+DTC_FLAGS += -@
 
 # Disable noisy checks by default
 ifeq ($(findstring 1,$(KBUILD_EXTRA_WARN)),)
-DTC_FLAGS += -Wno-unit_address_vs_reg \
-	-Wno-unit_address_format \
-	-Wno-avoid_unnecessary_addr_size \
-	-Wno-alias_paths \
-	-Wno-graph_child_address \
-	-Wno-simple_bus_reg \
-	-Wno-unique_unit_address \
-	-Wno-pci_device_reg
+DTC_FLAGS += $(call dtc-option,-Wno-unit_address_vs_reg) \
+	$(call dtc-option,-Wno-unit_address_format) \
+	$(call dtc-option,-Wno-avoid_unnecessary_addr_size) \
+	$(call dtc-option,-Wno-alias_paths) \
+	$(call dtc-option,-Wno-graph_child_address) \
+	$(call dtc-option,-Wno-simple_bus_reg) \
+	$(call dtc-option,-Wno-unique_unit_address) \
+	$(call dtc-option,-Wno-pci_device_reg)
 endif
 
 ifneq ($(findstring 2,$(KBUILD_EXTRA_WARN)),)
-DTC_FLAGS += -Wnode_name_chars_strict \
-	-Wproperty_name_chars_strict \
-	-Winterrupt_provider
+DTC_FLAGS += $(call dtc-option,-Wnode_name_chars_strict) \
+	$(call dtc-option,-Wproperty_name_chars_strict) \
+	$(call dtc-option,-Winterrupt_provider)
 endif
 
 DTC_FLAGS += $(DTC_FLAGS_$(basetarget))
+
+show_dtc_error =                                                          \
+(                                                                         \
+	cat $1;                                                           \
+	for err in "$$(cat $1 | grep 'Error:')"; do                       \
+	   echo "See more detail error as below:";                        \
+	   cat $$(echo $$err | cut -d':' -f2)                             \
+	   | awk '{printf("ERROR: %6d  %s\n"), NR, $$0}'                  \
+	   | head -n $$(echo $$err | grep -Eo ':[0-9]+' | cut -d':' -f2)  \
+	   | tail -n 2;                                                   \
+	done;                                                             \
+	rm $1;                                                            \
+	false;                                                            \
+)
 
 # Generate an assembly file to wrap the output of the device tree compiler
 quiet_cmd_dt_S_dtb= DTB     $@
@@ -356,13 +380,17 @@ $(obj)/%.dtb.S: $(obj)/%.dtb FORCE
 
 quiet_cmd_dtc = DTC     $@
 cmd_dtc = $(HOSTCC) -E $(dtc_cpp_flags) -x assembler-with-cpp -o $(dtc-tmp) $< ; \
-	$(DTC) -O $(patsubst .%,%,$(suffix $@)) -o $@ -b 0 \
+	$(DTC) -O $(2) -o $@ -b 0 -a 4 \
 		$(addprefix -i,$(dir $<) $(DTC_INCLUDE)) $(DTC_FLAGS) \
-		-d $(depfile).dtc.tmp $(dtc-tmp) ; \
+		-d $(depfile).dtc.tmp $(dtc-tmp) 2>$@.dtout || $(call show_dtc_error, $@.dtout) ;\
+	$(DTC) -q -O dts -I dtb -o $@.reverse.dts $@ ; \
 	cat $(depfile).pre.tmp $(depfile).dtc.tmp > $(depfile)
 
 $(obj)/%.dtb: $(src)/%.dts $(DTC) FORCE
-	$(call if_changed_dep,dtc)
+	$(call if_changed_dep,dtc,dtb)
+
+$(obj)/%.dtbo: $(src)/%.dts $(DTC) FORCE
+	$(call if_changed_dep,dtc,dtb)
 
 DT_CHECKER ?= dt-validate
 DT_BINDING_DIR := Documentation/devicetree/bindings
@@ -373,7 +401,7 @@ quiet_cmd_dtb_check =	CHECK   $@
       cmd_dtb_check =	$(DT_CHECKER) -u $(srctree)/$(DT_BINDING_DIR) -p $(DT_TMP_SCHEMA) $@
 
 define rule_dtc
-	$(call cmd_and_fixdep,dtc)
+	$(call cmd_and_fixdep,dtc,yaml)
 	$(call cmd,dtb_check)
 endef
 
@@ -403,31 +431,20 @@ printf "%08x\n" $$dec_size |						\
 )
 
 quiet_cmd_bzip2 = BZIP2   $@
-      cmd_bzip2 = cat $(real-prereqs) | $(KBZIP2) -9 > $@
-
-quiet_cmd_bzip2_with_size = BZIP2   $@
-      cmd_bzip2_with_size = { cat $(real-prereqs) | $(KBZIP2) -9; $(size_append); } > $@
+      cmd_bzip2 = { cat $(real-prereqs) | $(KBZIP2) -9; $(size_append); } > $@
 
 # Lzma
 # ---------------------------------------------------------------------------
 
 quiet_cmd_lzma = LZMA    $@
-      cmd_lzma = cat $(real-prereqs) | $(LZMA) -9 > $@
-
-quiet_cmd_lzma_with_size = LZMA    $@
-      cmd_lzma_with_size = { cat $(real-prereqs) | $(LZMA) -9; $(size_append); } > $@
+      cmd_lzma = { cat $(real-prereqs) | $(LZMA) -9; $(size_append); } > $@
 
 quiet_cmd_lzo = LZO     $@
-      cmd_lzo = cat $(real-prereqs) | $(KLZOP) -9 > $@
-
-quiet_cmd_lzo_with_size = LZO     $@
-      cmd_lzo_with_size = { cat $(real-prereqs) | $(KLZOP) -9; $(size_append); } > $@
+      cmd_lzo = { cat $(real-prereqs) | $(KLZOP) -9; $(size_append); } > $@
 
 quiet_cmd_lz4 = LZ4     $@
-      cmd_lz4 = cat $(real-prereqs) | $(LZ4) -l -12 --favor-decSpeed stdin stdout > $@
-
-quiet_cmd_lz4_with_size = LZ4     $@
-      cmd_lz4_with_size = { cat $(real-prereqs) | $(LZ4) -l -12 --favor-decSpeed stdin stdout; \
+      cmd_lz4 = { cat $(real-prereqs) | \
+                  $(LZ4) -l -12 --favor-decSpeed stdin stdout; \
                   $(size_append); } > $@
 
 # U-Boot mkimage
@@ -470,10 +487,7 @@ quiet_cmd_uimage = UIMAGE  $@
 # big dictionary would increase the memory usage too much in the multi-call
 # decompression mode. A BCJ filter isn't used either.
 quiet_cmd_xzkern = XZKERN  $@
-      cmd_xzkern = cat $(real-prereqs) | sh $(srctree)/scripts/xz_wrap.sh > $@
-
-quiet_cmd_xzkern_with_size = XZKERN  $@
-      cmd_xzkern_with_size = { cat $(real-prereqs) | sh $(srctree)/scripts/xz_wrap.sh; \
+      cmd_xzkern = { cat $(real-prereqs) | sh $(srctree)/scripts/xz_wrap.sh; \
                      $(size_append); } > $@
 
 quiet_cmd_xzmisc = XZMISC  $@
@@ -499,10 +513,7 @@ quiet_cmd_zstd = ZSTD    $@
       cmd_zstd = { cat $(real-prereqs) | $(ZSTD) -19; $(size_append); } > $@
 
 quiet_cmd_zstd22 = ZSTD22  $@
-      cmd_zstd22 = cat $(real-prereqs) | $(ZSTD) -22 --ultra > $@
-
-quiet_cmd_zstd22_with_size = ZSTD22  $@
-      cmd_zstd22_with_size = { cat $(real-prereqs) | $(ZSTD) -22 --ultra; $(size_append); } > $@
+      cmd_zstd22 = { cat $(real-prereqs) | $(ZSTD) -22 --ultra; $(size_append); } > $@
 
 # ASM offsets
 # ---------------------------------------------------------------------------

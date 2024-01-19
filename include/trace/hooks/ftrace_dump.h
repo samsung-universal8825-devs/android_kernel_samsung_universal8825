@@ -6,14 +6,12 @@
 
 #if !defined(_TRACE_HOOK_FTRACE_DUMP_H) || defined(TRACE_HEADER_MULTI_READ)
 #define _TRACE_HOOK_FTRACE_DUMP_H
-#include <trace/hooks/vendor_hooks.h>
 
-#ifdef __GENKSYMS__
 #include <linux/trace_seq.h>
 #include <linux/trace_events.h>
-#endif
 
-struct trace_seq;
+#include <linux/tracepoint.h>
+#include <trace/hooks/vendor_hooks.h>
 
 DECLARE_HOOK(android_vh_ftrace_oops_enter,
 	TP_PROTO(bool *ftrace_check),

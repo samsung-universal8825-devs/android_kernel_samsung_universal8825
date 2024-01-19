@@ -71,6 +71,13 @@
 #include <linux/android_kabi.h>
 #include <linux/android_vendor.h>
 
+// SEC_PRODUCT_FEATURE_KNOX_SUPPORT_NPA {
+#ifdef CONFIG_KNOX_NCM
+#define NAP_PROCESS_NAME_LEN	128
+#define NAP_DOMAIN_NAME_LEN		255
+#endif
+// SEC_PRODUCT_FEATURE_KNOX_SUPPORT_NPA }
+
 /*
  * This structure really needs to be cleaned up.
  * Most of it is for TCP, and not used by any of
@@ -246,6 +253,25 @@ struct sock_common {
 };
 
 struct bpf_local_storage;
+
+// SEC_PRODUCT_FEATURE_KNOX_SUPPORT_NPA {
+#ifdef CONFIG_KNOX_NCM
+struct sock_npa_vendor_data {
+	uid_t	knox_uid;
+	pid_t	knox_pid;
+	uid_t	knox_dns_uid;
+	char 	domain_name[NAP_DOMAIN_NAME_LEN];
+	char	process_name[NAP_PROCESS_NAME_LEN];
+	uid_t	knox_puid;
+	pid_t	knox_ppid;
+	char	parent_process_name[NAP_PROCESS_NAME_LEN];
+	pid_t	knox_dns_pid;
+	char 	dns_process_name[NAP_PROCESS_NAME_LEN];
+};
+
+#define SOCK_NPA_VENDOR_DATA_GET(sock) ((struct sock_npa_vendor_data*)((sock)->android_oem_data1))
+#endif
+// SEC_PRODUCT_FEATURE_KNOX_SUPPORT_NPA }
 
 /**
   *	struct sock - network layer representation of sockets
@@ -478,7 +504,11 @@ struct sock {
 	u32			sk_ack_backlog;
 	u32			sk_max_ack_backlog;
 	kuid_t			sk_uid;
+#if IS_ENABLED(CONFIG_DEBUG_SPINLOCK) || IS_ENABLED(CONFIG_DEBUG_LOCK_ALLOC)
 	spinlock_t		sk_peer_lock;
+#else
+	/* sk_peer_lock is in the ANDROID_KABI_RESERVE(1) field below */
+#endif
 	struct pid		*sk_peer_pid;
 	const struct cred	*sk_peer_cred;
 
@@ -522,7 +552,11 @@ struct sock {
 #endif
 	struct rcu_head		sk_rcu;
 
+#if IS_ENABLED(CONFIG_DEBUG_SPINLOCK) || IS_ENABLED(CONFIG_DEBUG_LOCK_ALLOC)
 	ANDROID_KABI_RESERVE(1);
+#else
+	ANDROID_KABI_USE(1, spinlock_t sk_peer_lock);
+#endif
 	ANDROID_KABI_RESERVE(2);
 	ANDROID_KABI_RESERVE(3);
 	ANDROID_KABI_RESERVE(4);
@@ -1252,7 +1286,7 @@ struct proto {
 	unsigned int		useroffset;	/* Usercopy region offset */
 	unsigned int		usersize;	/* Usercopy region size */
 
-	unsigned int __percpu	*orphan_count;
+	struct percpu_counter	*orphan_count;
 
 	struct request_sock_ops	*rsk_prot;
 	struct timewait_sock_ops *twsk_prot;

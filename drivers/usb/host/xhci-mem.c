@@ -13,6 +13,9 @@
 #include <linux/slab.h>
 #include <linux/dmapool.h>
 #include <linux/dma-mapping.h>
+#if IS_ENABLED(CONFIG_USB_HOST_CERTIFICATION)
+#define MAX_HC_SLOT_LIMIT 15
+#endif
 
 #include "xhci.h"
 #include "xhci-trace.h"
@@ -297,7 +300,7 @@ void xhci_ring_free(struct xhci_hcd *xhci, struct xhci_ring *ring)
 EXPORT_SYMBOL_GPL(xhci_ring_free);
 
 void xhci_initialize_ring_info(struct xhci_ring *ring,
-			       unsigned int cycle_state)
+					unsigned int cycle_state)
 {
 	/* The ring is empty, so the enqueue pointer == dequeue pointer */
 	ring->enqueue = ring->first_seg->trbs;
@@ -1047,6 +1050,9 @@ int xhci_alloc_virt_device(struct xhci_hcd *xhci, int slot_id,
 {
 	struct xhci_virt_device *dev;
 	int i;
+#if IS_ENABLED(CONFIG_USB_HOST_CERTIFICATION)
+	int count = 0;
+#endif
 
 	/* Slot ID 0 is reserved */
 	if (slot_id == 0 || xhci->devs[slot_id]) {
@@ -1054,6 +1060,14 @@ int xhci_alloc_virt_device(struct xhci_hcd *xhci, int slot_id,
 		return 0;
 	}
 
+#if IS_ENABLED(CONFIG_USB_HOST_CERTIFICATION)
+	for (i = 0; i < MAX_HC_SLOTS; i++) {
+		if (xhci->devs[i] && xhci->devs[i]->udev)
+			count++;
+	}
+	if (count >= MAX_HC_SLOT_LIMIT)
+		goto fail2;
+#endif
 	dev = kzalloc(sizeof(*dev), flags);
 	if (!dev)
 		return 0;
@@ -1112,6 +1126,9 @@ fail:
 		xhci_free_container_ctx(xhci, dev->out_ctx);
 	kfree(dev);
 
+#if IS_ENABLED(CONFIG_USB_HOST_CERTIFICATION)
+fail2:
+#endif
 	return 0;
 }
 
@@ -1598,7 +1615,6 @@ int xhci_endpoint_init(struct xhci_hcd *xhci,
 
 	ep_ctx->tx_info = cpu_to_le32(EP_MAX_ESIT_PAYLOAD_LO(max_esit_payload) |
 				      EP_AVG_TRB_LENGTH(avg_trb_len));
-
 	return 0;
 }
 
@@ -1845,6 +1861,7 @@ struct xhci_command *xhci_alloc_command(struct xhci_hcd *xhci,
 	INIT_LIST_HEAD(&command->cmd_list);
 	return command;
 }
+EXPORT_SYMBOL_GPL(xhci_alloc_command);
 
 struct xhci_command *xhci_alloc_command_with_ctx(struct xhci_hcd *xhci,
 		bool allocate_completion, gfp_t mem_flags)
@@ -1878,6 +1895,7 @@ void xhci_free_command(struct xhci_hcd *xhci,
 	kfree(command->completion);
 	kfree(command);
 }
+EXPORT_SYMBOL_GPL(xhci_free_command);
 
 int xhci_alloc_erst(struct xhci_hcd *xhci,
 		    struct xhci_ring *evt_ring,
@@ -1908,6 +1926,7 @@ int xhci_alloc_erst(struct xhci_hcd *xhci,
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(xhci_alloc_erst);
 
 void xhci_free_erst(struct xhci_hcd *xhci, struct xhci_erst *erst)
 {
@@ -1921,6 +1940,7 @@ void xhci_free_erst(struct xhci_hcd *xhci, struct xhci_erst *erst)
 				erst->erst_dma_addr);
 	erst->entries = NULL;
 }
+EXPORT_SYMBOL_GPL(xhci_free_erst);
 
 static struct xhci_device_context_array *xhci_vendor_alloc_dcbaa(
 		struct xhci_hcd *xhci, gfp_t flags)
@@ -2666,7 +2686,6 @@ int xhci_mem_init(struct xhci_hcd *xhci, gfp_t flags)
 	xhci_set_hc_event_deq(xhci);
 	xhci_dbg_trace(xhci, trace_xhci_dbg_init,
 			"Wrote ERST address to ir_set 0.");
-
 	/*
 	 * XXX: Might need to set the Interrupter Moderation Register to
 	 * something other than the default (~1ms minimum between interrupts).

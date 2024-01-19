@@ -40,25 +40,17 @@ struct vm_area_struct;
 #define ___GFP_THISNODE		0x200000u
 #define ___GFP_ACCOUNT		0x400000u
 #define ___GFP_ZEROTAGS		0x800000u
-#ifdef CONFIG_KASAN_HW_TAGS
-#define ___GFP_SKIP_ZERO		0x1000000u
-#define ___GFP_SKIP_KASAN_UNPOISON	0x2000000u
-#define ___GFP_SKIP_KASAN_POISON	0x4000000u
-#else
-#define ___GFP_SKIP_ZERO		0
-#define ___GFP_SKIP_KASAN_UNPOISON	0
-#define ___GFP_SKIP_KASAN_POISON	0
-#endif
+#define ___GFP_SKIP_KASAN_POISON	0x1000000u
 #ifdef CONFIG_CMA
-#define ___GFP_CMA		0x8000000u
+#define ___GFP_CMA		0x2000000u
 #else
 #define ___GFP_CMA		0
 #endif
 #ifdef CONFIG_LOCKDEP
 #ifdef CONFIG_CMA
-#define ___GFP_NOLOCKDEP	0x10000000u
+#define ___GFP_NOLOCKDEP	0x4000000u
 #else
-#define ___GFP_NOLOCKDEP	0x8000000u
+#define ___GFP_NOLOCKDEP	0x2000000u
 #endif
 #else
 #define ___GFP_NOLOCKDEP	0
@@ -237,34 +229,27 @@ struct vm_area_struct;
  *
  * %__GFP_ZERO returns a zeroed page on success.
  *
- * %__GFP_ZEROTAGS zeroes memory tags at allocation time if the memory itself
- * is being zeroed (either via __GFP_ZERO or via init_on_alloc, provided that
- * __GFP_SKIP_ZERO is not set). This flag is intended for optimization: setting
- * memory tags at the same time as zeroing memory has minimal additional
- * performace impact.
+ * %__GFP_ZEROTAGS returns a page with zeroed memory tags on success, if
+ * __GFP_ZERO is set.
  *
- * %__GFP_SKIP_KASAN_UNPOISON makes KASAN skip unpoisoning on page allocation.
- * Only effective in HW_TAGS mode.
- *
- * %__GFP_SKIP_KASAN_POISON makes KASAN skip poisoning on page deallocation.
- * Typically, used for userspace pages. Only effective in HW_TAGS mode.
+ * %__GFP_SKIP_KASAN_POISON returns a page which does not need to be poisoned
+ * on deallocation. Typically used for userspace pages. Currently only has an
+ * effect in HW tags mode.
  */
 #define __GFP_NOWARN	((__force gfp_t)___GFP_NOWARN)
 #define __GFP_COMP	((__force gfp_t)___GFP_COMP)
 #define __GFP_ZERO	((__force gfp_t)___GFP_ZERO)
 #define __GFP_ZEROTAGS	((__force gfp_t)___GFP_ZEROTAGS)
-#define __GFP_SKIP_ZERO ((__force gfp_t)___GFP_SKIP_ZERO)
-#define __GFP_SKIP_KASAN_UNPOISON ((__force gfp_t)___GFP_SKIP_KASAN_UNPOISON)
-#define __GFP_SKIP_KASAN_POISON   ((__force gfp_t)___GFP_SKIP_KASAN_POISON)
+#define __GFP_SKIP_KASAN_POISON	((__force gfp_t)___GFP_SKIP_KASAN_POISON)
 
 /* Disable lockdep for GFP context tracking */
 #define __GFP_NOLOCKDEP ((__force gfp_t)___GFP_NOLOCKDEP)
 
 /* Room for N __GFP_FOO bits */
 #ifdef CONFIG_CMA
-#define __GFP_BITS_SHIFT (28 + IS_ENABLED(CONFIG_LOCKDEP))
+#define __GFP_BITS_SHIFT (26 + IS_ENABLED(CONFIG_LOCKDEP))
 #else
-#define __GFP_BITS_SHIFT (27 + IS_ENABLED(CONFIG_LOCKDEP))
+#define __GFP_BITS_SHIFT (25 + IS_ENABLED(CONFIG_LOCKDEP))
 #endif
 #define __GFP_BITS_MASK ((__force gfp_t)((1 << __GFP_BITS_SHIFT) - 1))
 
@@ -571,6 +556,11 @@ static inline struct page *alloc_pages_node(int nid, gfp_t gfp_mask,
 	return __alloc_pages_node(nid, gfp_mask, order);
 }
 
+#ifdef CONFIG_KZEROD
+extern struct page *alloc_zeroed_page(void);
+extern unsigned long kzerod_get_zeroed_size(void);
+#endif
+
 #ifdef CONFIG_NUMA
 extern struct page *alloc_pages_current(gfp_t gfp_mask, unsigned order);
 
@@ -684,5 +674,24 @@ void free_contig_range(unsigned long pfn, unsigned int nr_pages);
 /* CMA stuff */
 extern void init_cma_reserved_pageblock(struct page *page);
 #endif
+
+#ifdef CONFIG_HPA
+int alloc_pages_highorder_except(int order, struct page **pages, int nents,
+				 phys_addr_t exception_areas[][2],
+				 int nr_exception);
+#else
+static inline int alloc_pages_highorder_except(int order,
+					       struct page **pages, int nents,
+					       phys_addr_t exception_areas[][2],
+					       int nr_exception)
+{
+	return -ENOENT;
+}
+#endif
+static inline int alloc_pages_highorder(int order, struct page **pages,
+					int nents)
+{
+	return alloc_pages_highorder_except(order, pages, nents, NULL, 0);
+}
 
 #endif /* __LINUX_GFP_H */

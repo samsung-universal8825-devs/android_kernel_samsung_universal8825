@@ -4,7 +4,6 @@
 #
 
 source "virt/lib/Kconfig"
-source "virt/kvm/Kconfig"
 
 menuconfig VIRTUALIZATION
 	bool "Virtualization"
@@ -20,7 +19,7 @@ if VIRTUALIZATION
 
 menuconfig KVM
 	bool "Kernel-based Virtual Machine (KVM) support"
-	depends on HAVE_KVM
+	depends on OF
 	# for TASKSTATS/TASK_DELAY_ACCT:
 	depends on NET && MULTIUSER
 	select MMU_NOTIFIER
@@ -46,29 +45,10 @@ menuconfig KVM
 
 	  If unsure, say N.
 
-config NVHE_EL2_DEBUG
-	bool "Debug mode for non-VHE EL2 object"
-	depends on KVM
-	help
-	  Say Y here to enable the debug mode for the non-VHE KVM EL2 object.
-	  Failure reports will BUG() in the hypervisor. This is intended for
-	  local EL2 hypervisor development.
+if KVM
 
-	  If unsure, say N.
+source "virt/kvm/Kconfig"
 
-config KVM_S2MPU
-	bool "Stage-2 Memory Protection Unit support"
-	depends on KVM
-	help
-	  Support for the Stage-2 Memory Protection Unit (S2MPU) and Stream
-	  Security Mapping Table (SSMT) devices in KVM. This allows the
-	  hypervisor to restrict DMA access to its memory and the memory of
-	  protected guests.
-
-config TEST_KVM_S2MPU
-	tristate "Test kernel module for S2MPU"
-	depends on KVM_S2MPU
-	help
-	  Kernel module for kselftests that exercises the KVM S2MPU driver.
+endif # KVM
 
 endif # VIRTUALIZATION

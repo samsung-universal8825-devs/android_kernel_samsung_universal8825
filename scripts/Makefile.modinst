@@ -6,7 +6,7 @@
 PHONY := __modinst
 __modinst:
 
-include $(srctree)/scripts/Kbuild.include
+include scripts/Kbuild.include
 
 modules := $(sort $(shell cat $(if $(KBUILD_EXTMOD),$(KBUILD_EXTMOD)/)modules.order))
 

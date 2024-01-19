@@ -109,16 +109,33 @@ void xhci_quiesce(struct xhci_hcd *xhci)
  */
 int xhci_halt(struct xhci_hcd *xhci)
 {
-	int ret;
+	int ret, i, retry = 5;
 	xhci_dbg_trace(xhci, trace_xhci_dbg_init, "// Halt the HC");
+#ifdef CONFIG_USB_DEBUG_DETAILED_LOG
+	xhci_info(xhci, "%s\n", __func__);
+#endif
 	xhci_quiesce(xhci);
 
 	ret = xhci_handshake(&xhci->op_regs->status,
 			STS_HALT, STS_HALT, XHCI_MAX_HALT_USEC);
 	if (ret) {
 		xhci_warn(xhci, "Host halt failed, %d\n", ret);
+		xhci_info(xhci, "Resetting HCD\n");
+		/* Reset the internal HC memory state and registers. */
+		for (i = 0; i < retry; i++) {
+			ret = xhci_reset(xhci, XHCI_RESET_SHORT_USEC);
+			if (!ret) {
+				xhci_info(xhci, "Reset complete\n");
+				ret = xhci_handshake(&xhci->op_regs->status,
+						STS_HALT, STS_HALT, XHCI_MAX_HALT_USEC);
+				if (!ret)
+					goto out;
+			}
+		}
+		xhci_warn(xhci, "Host halt retry failed, %d\n", ret);
 		return ret;
 	}
+out:
 	xhci->xhc_state |= XHCI_STATE_HALTED;
 	xhci->cmd_ring_state = CMD_RING_STATE_STOPPED;
 	return ret;
@@ -210,6 +227,8 @@ int xhci_reset(struct xhci_hcd *xhci, u64 timeout_us)
 	 */
 	ret = xhci_handshake(&xhci->op_regs->status, STS_CNR, 0, timeout_us);
 
+	if (ret)
+		xhci_warn(xhci, "%s STS_CNR is fail!!\n", __func__);
 	xhci->usb2_rhub.bus_state.port_c_suspend = 0;
 	xhci->usb2_rhub.bus_state.suspended_ports = 0;
 	xhci->usb2_rhub.bus_state.resuming_ports = 0;
@@ -1010,7 +1029,8 @@ int xhci_suspend(struct xhci_hcd *xhci, bool do_wakeup)
 	xhci_dbc_suspend(xhci);
 
 	/* Don't poll the roothubs on bus suspend. */
-	xhci_dbg(xhci, "%s: stopping port polling.\n", __func__);
+	xhci_dbg(xhci, "%s: stopping usb%d port polling.\n",
+		 __func__, hcd->self.busnum);
 	clear_bit(HCD_FLAG_POLL_RH, &hcd->flags);
 	del_timer_sync(&hcd->rh_timer);
 	clear_bit(HCD_FLAG_POLL_RH, &xhci->shared_hcd->flags);
@@ -1282,7 +1302,8 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 		usb_asmedia_modifyflowcontrol(to_pci_dev(hcd->self.controller));
 
 	/* Re-enable port polling. */
-	xhci_dbg(xhci, "%s: starting port polling.\n", __func__);
+	xhci_dbg(xhci, "%s: starting usb%d port polling.\n",
+		 __func__, hcd->self.busnum);
 	set_bit(HCD_FLAG_POLL_RH, &xhci->shared_hcd->flags);
 	usb_hcd_poll_rh_status(xhci->shared_hcd);
 	set_bit(HCD_FLAG_POLL_RH, &hcd->flags);
@@ -1341,7 +1362,6 @@ unsigned int xhci_get_endpoint_address(unsigned int ep_index)
 	unsigned int direction = ep_index % 2 ? USB_DIR_OUT : USB_DIR_IN;
 	return direction | number;
 }
-EXPORT_SYMBOL_GPL(xhci_get_endpoint_address);
 
 /* Find the flag for this endpoint (for use in the control context).  Use the
  * endpoint index to create a bitmask.  The slot context is bit 0, endpoint 0 is
@@ -3017,8 +3037,10 @@ void xhci_reset_bandwidth(struct usb_hcd *hcd, struct usb_device *udev)
 	for (i = 0; i < 31; i++) {
 		if (virt_dev->eps[i].new_ring) {
 			xhci_debugfs_remove_endpoint(xhci, virt_dev, i);
-			if (xhci_vendor_is_usb_offload_enabled(xhci, virt_dev, i))
+			if (xhci_vendor_is_usb_offload_enabled(xhci, virt_dev, i)) {
+				xhci->quirks |= BIT_ULL(60);
 				xhci_vendor_free_transfer_ring(xhci, virt_dev, i);
+			}
 			else
 				xhci_ring_free(xhci, virt_dev->eps[i].new_ring);
 
@@ -4251,6 +4273,7 @@ static int xhci_setup_device(struct usb_hcd *hcd, struct usb_device *udev,
 	xhci_dbg_trace(xhci, trace_xhci_dbg_address,
 		       "Internal device address = %d",
 		       le32_to_cpu(slot_ctx->dev_state) & DEV_ADDR_MASK);
+
 out:
 	mutex_unlock(&xhci->mutex);
 	if (command) {
