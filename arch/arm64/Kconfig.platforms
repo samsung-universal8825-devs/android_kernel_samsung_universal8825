@@ -103,6 +103,18 @@ config SOC_EXYNOS2100
 	help
 	  Samsung EXYNOS991 has GIC600 so, ARM_GIC_V3 must be enabled
 
+config MODEL_A33X
+	bool "Samsung Galaxy A33 5G"
+	depends on SOC_S5E8825
+
+config MODEL_A53X
+	bool "Samsung Galaxy A53 5G"
+	depends on SOC_S5E8825
+
+config MODEL_M33X
+        bool "Samsung Galaxy M33 5G"
+        depends on SOC_S5E8825
+
 config BOARD_UNIVERSAL2100
 	bool "Samsung EXYNOS2100 Universal Board support"
 	help
