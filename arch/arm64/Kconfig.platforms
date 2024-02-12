@@ -115,6 +115,10 @@ config MODEL_M33X
         bool "Samsung Galaxy M33 5G"
         depends on SOC_S5E8825
 
+config MODEL_M34X
+        bool "Samsung Galaxy M34 5G"
+        depends on SOC_S5E8825
+
 config BOARD_UNIVERSAL2100
 	bool "Samsung EXYNOS2100 Universal Board support"
 	help

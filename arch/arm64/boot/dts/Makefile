@@ -126,6 +126,8 @@ dtbo-$(CONFIG_MODEL_A53X) += samsung/a53x/a53x_eur_open_w00_r06.dtbo
 dtbo-$(CONFIG_MODEL_M33X) += samsung/m33x/m33x_eur_open_w00_r00.dtbo
 dtbo-$(CONFIG_MODEL_M33X) += samsung/m33x/m33x_eur_open_w00_r01.dtbo
 dtbo-$(CONFIG_MODEL_M33X) += samsung/m33x/m33x_eur_open_w00_r02.dtbo
+dtbo-$(CONFIG_MODEL_M34X) += samsung/m34x/m34x_eur_open_w00_r00.dtbo
+dtbo-$(CONFIG_MODEL_M34X) += samsung/m34x/m34x_eur_open_w00_r01.dtbo
 
 # Subdirs
 subdir-y += actions
