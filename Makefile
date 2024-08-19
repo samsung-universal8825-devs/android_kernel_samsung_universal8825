@@ -21,9 +21,9 @@ __all:
 # Set variables while building with aosp build system
 ARCH := arm64
 CROSS_COMPILE := aarch64-linux-gnu-
-PLATFORM_VERSION ?= 13
-ANDROID_MAJOR_VERSION ?= t
-SEC_BUILD_CONF_VENDOR_BUILD_OS ?= 13
+PLATFORM_VERSION ?= 12
+ANDROID_MAJOR_VERSION ?= s
+SEC_BUILD_CONF_VENDOR_BUILD_OS ?= 12
 LLVM := 1
 LLVM_IAS := 1
 
